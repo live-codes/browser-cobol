@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Client-side COBOL playground: compiles and runs COBOL in the browser via GnuCOBOL compiled to WebAssembly.",
+  "description": "Client-side COBOL playground demo, built on @live-codes/cobol-wasm.",
   "license": "MIT",
   "scripts": {
-    "start": "node serve.js 8126 public",
-    "start:isolation": "node serve.js 8126 public --isolation",
+    "vendor": "node packages/cobol-wasm/bin/copy-assets.mjs vendor",
+    "start": "node serve.js 8126",
+    "start:isolation": "node serve.js 8126 --isolation",
     "check": "node --check serve.js && node --check public/main.js"
   }
 }

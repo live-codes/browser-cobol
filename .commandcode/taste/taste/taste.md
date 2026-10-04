@@ -1,0 +1,9 @@
+# Taste
+- Prefers to start new language/tooling features with a proof-of-concept (a minimal simple HTML page) that demonstrates the core capability before committing to full integration. Confidence: 0.6
+- Strongly values client-side / serverless execution: code should run entirely in the browser with no server. Confidence: 0.7
+- Wants apparent hard constraints/blockers investigated to their root cause ("dig deeper") rather than accepted at face value — e.g. prefers diagnosing why an error occurs and whether the requirement is real, over working around it or declaring it unavoidable. Confidence: 0.6
+- Prefers loading runtime/binary assets from the project's own npm scope (e.g. `@live-codes/*` packages, including via CDN) over pulling them from a third party's website, even when an external mirror is known to work — including creating/publishing a new scoped package to own assets that otherwise only exist on a third-party mirror. Confidence: 0.7
+- Wants new packages built to match the structure and conventions of the existing sibling package (e.g. `cobol-wasm` "similar to" `clang-wasm`) rather than inventing a fresh design. Confidence: 0.55
+- Prefers packages to live inside the consuming project's own repo under a `packages/` directory (monorepo layout) rather than as a standalone directory beside it. Confidence: 0.6
+- Delegates licensing decisions ("I don't mind with licensing") but still probes them, and wants any license to be compatible with every dependency. Given a choice, they pick the most permissive terms (e.g. MIT) for their own original code and confine copyleft only to the third-party components that actually require it — accepting a per-component/SPDX split (e.g. `(MIT AND GPL-3.0-or-later)`) rather than copylefting their own code. Confidence: 0.65
+- Cares about downstream consumers not inheriting copyleft obligations from their packages (e.g. keeping the code MIT so a consumer can bundle it freely). Confidence: 0.55

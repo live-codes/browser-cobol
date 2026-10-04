@@ -4,6 +4,14 @@
 server-side compilation and **no cross-origin isolation**. Everything below was **run**, in headless
 Chrome — not inferred from docs.
 
+> **Update — the runtime is now a package.** The work this document recommends in §7 has been done:
+> the runtime lives in [`packages/cobol-wasm`](packages/cobol-wasm) as `@live-codes/cobol-wasm`,
+> which ships the GnuCOBOL assets, boots the toolchain, and shapes the output, and the demo in
+> `public/` is a thin page on top of it. Its assets are copied into `vendor/` by its own
+> `cobol-wasm-copy-assets`, so **nothing is fetched from a third-party host any more** — §6's table
+> describes the arrangement the spike was measured against, and is kept as the record of what the
+> pipeline actually loads. The isolation finding in §2 is unchanged.
+
 ## 1. The pipeline, and why it is this one
 
 ```
@@ -28,6 +36,11 @@ The one stack that does the whole thing client-side is
 artifacts) plus [`seo-rii/wasm-idle`](https://github.com/seo-rii/wasm-idle), which consumes them
 through `@wasm-idle/llvm-core` — MIT-licensed browser host code, with the compiler assets loaded
 from an HTTP(S) URL you supply.
+
+Two of the three stages already come from packages in our own scope: Clang and lld arrive from
+[`@live-codes/clang-wasm`](https://www.npmjs.com/package/@live-codes/clang-wasm), which wraps the
+same `llvm-core` Clang host. Only the GnuCOBOL frontend (`cobc` + its rootfs) is still fetched from
+the producer's site — §6 covers what that costs and what is left to mirror.
 
 ## 2. Cross-origin isolation is NOT required — the requirement is an upstream bug
 
@@ -91,16 +104,17 @@ nothing can silently receive something pretending to be shared. If a future vers
 does start using shared memory, this fails loudly at the construction site instead of corrupting
 behaviour.
 
-**Measured, with the header off** (`crossOriginIsolated === false`):
+**Measured, with the headers off** (`crossOriginIsolated === false`):
 
 | | isolation on | isolation off + shim |
 | --- | --- | --- |
-| toolchain load | ~1.0 s warm | ~6.4 s cold, ~1 s warm |
 | compile | 801–809 ms | 763 ms |
 | run | 12–14 ms | 12 ms |
-| all six examples | pass | **pass** |
+| all six examples (see §3) | pass | **pass** |
 
-Every example in §3 was re-run under `crossOriginIsolated === false`.
+Every example in §3 was re-run under `crossOriginIsolated === false`. Isolation has no effect on
+correctness, and none on per-run cost — the only cost either way is the one-time asset download in
+§6, which happens before either mode diverges.
 
 **Worth passing upstream.** The real fix is one line in the WASI host's memory-write path —
 `typeof SharedArrayBuffer !== 'undefined' && n instanceof SharedArrayBuffer` — which would remove a
@@ -126,6 +140,13 @@ which is the clearest evidence the real runtime library is doing the work.
 
 Compile cost is dominated by clang compiling the generated C, so it barely varies with program size
 at this scale.
+
+**Toolchain load is network-bound, and it is the whole cost of a cold start.** ~25 MB (§6), measured
+at **73 s** from a cold cache on the ~350 KB/s connection this was developed on, then **~1 s** once
+the browser has the assets. An earlier revision of this document claimed "~6 s cold"; that was a warm
+HTTP cache in a reused browser profile, not a cold start, and 73 s is the corrected figure. The
+number is a property of the connection, not of the runtime — but it is the honest one to plan for,
+and it is why `largeDownload: true` is the right LiveCodes flag.
 
 ## 4. What the compiler tells the user
 
@@ -167,24 +188,52 @@ Two driver-level details this forced:
   sysroot with its `c-sysroot.tar.gz`; the network log confirms the Clang one is not requested.
   Fetching it would add 5.1 MB for nothing.
 
-## 6. Payload
+## 6. Payload, and where each half comes from
 
-Compressed bytes actually transferred on a first run, from the network log and content lengths:
+Compressed bytes actually transferred on a first run, and the host that serves each:
 
-| asset | bytes |
-| --- | --- |
-| `clang/bin/clang.wasm.gz` | 15,721,977 |
-| `clang/bin/lld.wasm.gz` | 7,837,837 |
-| `wasm-cobol/c-sysroot.tar.gz` | 1,216,964 |
-| `wasm-cobol/cobc.wasm.gz` | 600,296 |
-| `wasm-cobol/rootfs.tar.gz` | 530,360 |
-| `clang/bin/memfs.wasm.gz` | 18,974 |
-| host JS (`llvm-core/cobol/+esm`, `browser_wasi_shim`) | ~250,000 |
-| **total** | **~26 MB (24.7 MiB)** |
+| asset | bytes | served from |
+| --- | --- | --- |
+| `bin/clang.wasm.gz` | 15,721,977 | `@live-codes/clang-wasm@0.3.0` (jsDelivr) |
+| `bin/lld.wasm.gz` | 7,837,837 | ″ |
+| `bin/memfs.wasm.gz` | 38,702 | ″ |
+| `c-sysroot.tar.gz` | 1,216,964 | `seorii.page/wasm-idle/wasm-cobol/` |
+| `cobc.wasm.gz` | 600,296 | ″ |
+| `rootfs.tar.gz` | 530,360 | ″ |
+| host JS (`llvm-core/cobol/+esm`, `browser_wasi_shim`) | ~250,000 | jsDelivr |
+| **total** | **~26 MB (25.0 MiB)** | |
 
 Nothing is committed to this repo: the page is two files, and every byte above is fetched from a
 CDN. Decompressed, clang alone is 44 MB of memory, which is why the toolchain is loaded lazily on
 the first Run rather than on page load.
+
+### Clang now comes from our own package
+
+The Clang build in [`@live-codes/clang-wasm`](https://www.npmjs.com/package/@live-codes/clang-wasm)
+is the same one the producer's mirror serves. Its `assets/runtime-manifest.v1.json` declares the
+same `llvmorg-22.1.8` and the same provenance revision (`ca7933e4…`), and `clang.wasm.gz` and
+`lld.wasm.gz` are byte-identical in size to the mirror's copies. Two files differ:
+
+- **`memfs.wasm.gz`** — 38,702 B against the mirror's 18,974 B, a different build of the small
+  filesystem shim. This is the one swap that could plausibly break the runtime, so it was verified
+  by running, not by inspection: compile and run both succeed with it (exit 0, output identical).
+- **`bin/sysroot.tar.gz`** — irrelevant here, because the COBOL host overrides the Clang sysroot
+  with its own `c-sysroot.tar.gz`. It is not fetched at all.
+
+So the 23 MB bulk arrives from a package in our scope, pinned to an exact version, served by
+jsDelivr. Swapping it meant changing one URL constant; `?clangBaseUrl=` overrides it.
+
+**What is still third-party.** There is no `@live-codes/cobol-wasm` on npm, so the three GnuCOBOL
+artifacts still come from `seorii.page`. They are 2.3 MB of the 25 MB — small, but they are the
+frontend, so nothing runs without them. `clang-wasm-copy-assets` exists for the Clang half and has
+no COBOL equivalent, which is exactly the gap a `@live-codes/cobol-wasm` package would fill.
+
+### A note on jsDelivr
+
+It serves the 15.7 MB asset fine (`Content-Type: application/gzip`, `Access-Control-Allow-Origin: *`,
+raw gzip with no `Content-Encoding`, which the host's loader handles). It was also *faster* than the
+mirror here — 460 KB/s against 305 KB/s. But a free public CDN is not the right place to put 23 MB
+per user for a product; LiveCodes' own vendor CDN is.
 
 ## 7. Recommendation for LiveCodes
 
@@ -201,11 +250,16 @@ the first Run rather than on page load.
   it is 6 lines and belongs next to the driver rather than in a shared bundle. If the host is ever
   updated to use shared memory, the shim throws at the construction site — a loud, early failure
   rather than a wrong answer.
-- **Assets:** the six files in §6 belong in `browser-compilers` (or a mirror we control) and should
-  be referenced from `vendors.ts`, pinned by hash. Depending on `seorii.page` directly is fine for
-  a spike and wrong for a product.
+- **Assets:** done — see the update at the top. Clang, lld and memfs come from
+  `@live-codes/clang-wasm`, and the three GnuCOBOL artifacts now ship inside
+  `@live-codes/cobol-wasm` (`packages/cobol-wasm`), with SHA-256 receipts verified on every load and
+  a `cobol-wasm-copy-assets` bin that publishes both trees for a page to serve. The one thing left
+  for a real deployment is to move all of it off jsDelivr and onto LiveCodes' vendor CDN (`getUrl`),
+  because 23 MB per user is not a free-tier workload — `vendors.ts` already has the pattern:
+  `clangWasmBaseUrl = getUrl('@live-codes/clang-wasm@0.2.0/')`.
 - **Hosting the host code:** `@wasm-idle/llvm-core` is a normal npm dependency for a bundled build.
-  The import map in `public/index.html` exists only so this spike needs no bundler.
+  The demo loads the package's IIFE bundle (`packages/cobol-wasm/dist/cobol-wasm.global.js`), which
+  bundles the host, so it needs no import map and no bundler of its own.
 - **Contract mapping:** program output is stdout; compiler diagnostics are stderr; `exitCode` is
   the guest's, and a compile failure is a *successful* compile call with `success: false`, which a
   driver must check before executing.

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@live-codes/cobol-wasm — browser example</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #14161a;
+        --panel: #1b1e24;
+        --border: #2b3038;
+        --text: #e6e8eb;
+        --dim: #8b93a1;
+        --accent: #e0555f;
+        --ok: #5cc98a;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+      h1 { font-size: 13px; margin: 0; font-weight: 600; }
+      h1 span { color: var(--accent); }
+      .grow { flex: 1; }
+      select, button {
+        font: inherit;
+        font-size: 13px;
+        color: var(--text);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 8px;
+      }
+      button {
+        font-weight: 600;
+        color: #14161a;
+        background: var(--accent);
+        border: 0;
+        padding: 7px 16px;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      #status { font: 11px var(--mono); color: var(--dim); }
+      #timings { font: 11px var(--mono); color: var(--dim); }
+      main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+      section { display: flex; flex-direction: column; min-height: 0; }
+      section + section { border-left: 1px solid var(--border); }
+      .head {
+        padding: 7px 12px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--dim);
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+      }
+      textarea {
+        flex: 1;
+        border: 0;
+        resize: none;
+        padding: 12px;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.6 var(--mono);
+        outline: none;
+      }
+      #stdin { flex: 0 0 auto; height: 6em; border-top: 1px solid var(--border); }
+      pre {
+        flex: 1;
+        overflow: auto;
+        margin: 0;
+        padding: 12px;
+        font: 13px/1.55 var(--mono);
+        white-space: pre-wrap;
+      }
+      #errors { flex: 0 1 45%; border-top: 1px solid var(--border); color: #ffb4a2; }
+      #output:empty::before, #errors:empty::before { content: "—"; color: #3a4049; }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "@live-codes/cobol-wasm": "/src/index.js",
+          "@wasm-idle/llvm-core/cobol": "https://cdn.jsdelivr.net/npm/@wasm-idle/llvm-core@1.0.0/cobol/+esm",
+          "@wasm-idle/llvm-core/clang": "https://cdn.jsdelivr.net/npm/@wasm-idle/llvm-core@1.0.0/clang/+esm"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header>
+      <h1>@live-codes/cobol-wasm <span>&rarr;</span> browser example</h1>
+      <select id="examples"></select>
+      <select id="format" aria-label="Source format"></select>
+      <div class="grow"></div>
+      <span id="status">ready</span>
+      <span id="timings"></span>
+      <button id="run" type="button">Run</button>
+    </header>
+
+    <main>
+      <section>
+        <div class="head">main.cob</div>
+        <textarea id="editor" spellcheck="false" autocomplete="off"></textarea>
+        <div class="head">stdin</div>
+        <textarea id="stdin" spellcheck="false" autocomplete="off"></textarea>
+      </section>
+      <section>
+        <div class="head">Program output</div>
+        <pre id="output"></pre>
+        <div class="head">Diagnostics</div>
+        <pre id="errors"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

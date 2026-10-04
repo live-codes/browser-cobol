@@ -1,29 +1,17 @@
-import { createCobolCompiler, executeBrowserCobolArtifact } from '@wasm-idle/llvm-core/cobol';
-
+/* global cobolWasm */
 /**
- * Compiles and runs COBOL in the browser.
+ * The demo driver.
  *
- * The pipeline is the real one, and none of it is a subset interpreter:
+ * Everything that used to live here — booting the toolchain, compiling, running, stdin plumbing,
+ * ANSI and workspace-prefix scrubbing, the SharedArrayBuffer stub — now lives in
+ * `@live-codes/cobol-wasm`, which is loaded above as the IIFE bundle. What is left is the page:
+ * examples, a source box, a stdin box, and a run button.
  *
- *   1. GnuCOBOL 3.2 `cobc` (compiled to wasm32-wasi) translates the source to C
- *   2. Clang 22.1.8 (wasm-llvm) compiles that C against a WASI sysroot
- *   3. wasm-ld links it against libcob, GMP and the WASI emulation libraries
- *   4. the resulting WASI module is instantiated and run in this tab
- *
- * The compiler and its assets are static files fetched over HTTP — this page
- * has no build step and needs no server-side compilation. The toolchain is
- * loaded lazily on the first Run, because it is much heavier than the page.
- *
- * Override either mirror with `?cobolBaseUrl=` / `?clangBaseUrl=` (absolute, or
- * relative to this page with a trailing slash).
+ * The assets come from `vendor/`, written by the package's own `cobol-wasm-copy-assets`. Nothing in
+ * this page — and nothing in the package — is fetched from anyone else's site.
  */
 
-const DEFAULT_COBOL_BASE_URL = 'https://seorii.page/wasm-idle/wasm-cobol/';
-const DEFAULT_CLANG_BASE_URL = 'https://seorii.page/wasm-idle/clang/';
-
-// Each build gets a private workspace directory; the compiler's diagnostics
-// name the source through it, which is noise for someone reading the output.
-const WORKSPACE_PREFIX = /__wasm_cobol_\d+\//g;
+const ASSETS_URL = new URL('/vendor/', location.href);
 
 const EXAMPLES = [
   {
@@ -120,15 +108,6 @@ PROCEDURE DIVISION.
   },
 ];
 
-function resolveBaseUrl(param, fallback) {
-  const override = (new URLSearchParams(location.search).get(param) ?? '').trim();
-  const base = override === '' ? fallback : override;
-  return { baseUrl: base.endsWith('/') ? base : `${base}/`, isOverride: override !== '' };
-}
-
-const cobolMirror = resolveBaseUrl('cobolBaseUrl', DEFAULT_COBOL_BASE_URL);
-const clangMirror = resolveBaseUrl('clangBaseUrl', DEFAULT_CLANG_BASE_URL);
-
 const el = {
   editor: document.getElementById('editor'),
   filename: document.getElementById('filename'),
@@ -143,12 +122,11 @@ const el = {
   stdin: document.getElementById('stdin'),
   output: document.getElementById('output'),
   diagnostics: document.getElementById('diagnostics'),
-  cobolUrl: document.getElementById('cobol-url'),
-  cobolOverride: document.getElementById('cobol-override'),
+  assetsUrl: document.getElementById('assets-url'),
 };
 
-// The browser probes drive the page by element id rather than by evaluating
-// string literals, which some shells mangle when passing arguments.
+// The browser probes drive the page by element id rather than by evaluating string literals, which
+// some shells mangle when passing arguments.
 Object.assign(window, el);
 
 let compiler = null;
@@ -165,23 +143,9 @@ function setProgress(text) {
   if (text !== null) el.progressText.textContent = text;
 }
 
-function append(node, text) {
-  if (!text) return;
-  node.appendChild(document.createTextNode(text));
-  node.scrollTop = node.scrollHeight;
-}
-
-// The compiler colours its output and names the source through its private
-// workspace directory; the pane renders plain text, so strip both.
-const ANSI = /\x1B\[[0-9;]*m/g;
-
-function appendDiagnostics(text) {
-  append(el.diagnostics, text.replace(ANSI, '').replace(WORKSPACE_PREFIX, ''));
-}
-
 function clearOutput() {
-  el.output.replaceChildren();
-  el.diagnostics.replaceChildren();
+  el.output.textContent = '';
+  el.diagnostics.textContent = '';
   el.duration.textContent = '';
 }
 
@@ -190,33 +154,16 @@ function loadExample(index) {
   el.examples.value = String(index);
 }
 
-/** The toolchain is large, so it is fetched on first use and then reused. */
+/** The toolchain is large, so it is created on first use and kept for the session. */
 async function ensureCompiler() {
   if (compiler) return compiler;
   setStatus('loading', 'loading toolchain…', 'busy');
-  setProgress('Downloading GnuCOBOL, Clang and the WASI sysroot…');
+  setProgress('Downloading and instantiating GnuCOBOL and Clang…');
   const started = performance.now();
-  compiler = await createCobolCompiler({
-    runtimeBaseUrl: cobolMirror.baseUrl,
-    clangRuntimeBaseUrl: clangMirror.baseUrl,
-  });
+  compiler = await cobolWasm.createCompiler({ baseUrl: ASSETS_URL });
   document.documentElement.dataset.toolchainMs = String(Math.round(performance.now() - started));
   setProgress(null);
   return compiler;
-}
-
-/**
- * COBOL reads stdin through ACCEPT. The runtime pulls chunks until the callback
- * returns null, so this yields the buffer once and then reports end-of-input.
- * It must never return an empty string repeatedly — the reader would spin.
- */
-function oneShotStdin(text) {
-  let sent = false;
-  return () => {
-    if (sent || text === '') return null;
-    sent = true;
-    return text.endsWith('\n') ? text : `${text}\n`;
-  };
 }
 
 async function run() {
@@ -224,61 +171,37 @@ async function run() {
 
   const source = el.editor.value;
   if (source.trim() === '') return;
-  // GnuCOBOL warns about an unterminated final line, so end it explicitly
-  // rather than trimming the newline away.
-  const code = source.endsWith('\n') ? source : `${source}\n`;
 
   running = true;
   el.run.disabled = true;
   clearOutput();
   // Per-run metrics are read by the browser probes; stale values would lie.
-  for (const key of ['stage', 'compileMs', 'execMs', 'exitCode']) {
+  for (const key of ['toolchainMs', 'compileMs', 'runMs', 'exitCode', 'errorCount']) {
     delete document.documentElement.dataset[key];
   }
 
   const started = performance.now();
   try {
-    await ensureCompiler();
-
-    setStatus('compiling', 'compiling…', 'busy');
-    const compileStarted = performance.now();
-    const result = await compiler.compile({
-      code,
-      fileName: 'main.cob',
-      sourceFormat: el.format.value,
-      onProgress: (progress) => {
-        document.documentElement.dataset.stage = progress.stage;
-        setProgress(`${progress.message} (${progress.percent}%)`);
-      },
-    });
-    document.documentElement.dataset.compileMs = String(Math.round(performance.now() - compileStarted));
-    setProgress(null);
-    appendDiagnostics(result.stdout ?? '');
-
-    if (!result.success || !result.artifact) {
-      // stderr repeats the compiler output when the failure came from the
-      // compile itself, so only surface it when it adds something.
-      if (result.stderr && result.stderr !== result.stdout) appendDiagnostics(result.stderr);
-      setStatus('error', 'compile error', 'err');
-      el.duration.textContent = `${Math.round(performance.now() - started)} ms`;
-      return;
-    }
-
+    const active = await ensureCompiler();
     setStatus('running', 'running…', 'busy');
-    const execStarted = performance.now();
-    const execution = await executeBrowserCobolArtifact(result.artifact, {
-      stdin: oneShotStdin(el.stdin.value.replace(/\r\n/g, '\n')),
-      stdout: (chunk) => append(el.output, chunk),
-      stderr: (chunk) => appendDiagnostics(chunk),
-    });
-    document.documentElement.dataset.execMs = String(Math.round(performance.now() - execStarted));
-    document.documentElement.dataset.exitCode = String(execution.exitCode ?? 'null');
 
-    setStatus(execution.exitCode === 0 ? 'done' : 'error', `exit ${execution.exitCode}`, execution.exitCode === 0 ? 'ok' : 'err');
+    const result = await active.run(source, el.stdin.value.replace(/\r\n/g, '\n'), {
+      sourceFormat: el.format.value,
+    });
+
+    el.output.textContent = result.output;
+    el.diagnostics.textContent = result.diagnostics.join('\n');
+    document.documentElement.dataset.exitCode = String(result.exitCode);
+    document.documentElement.dataset.compileMs = String(result.compileMs);
+    document.documentElement.dataset.runMs = String(result.runMs);
+    document.documentElement.dataset.errorCount = String(result.errors.length);
+
+    const ok = result.exitCode === 0;
+    setStatus(ok ? 'done' : 'error', ok ? 'exit 0' : `exit ${result.exitCode}`, ok ? 'ok' : 'err');
     el.duration.textContent = `${Math.round(performance.now() - started)} ms`;
   } catch (error) {
     setProgress(null);
-    appendDiagnostics(error instanceof Error ? error.message : String(error));
+    el.diagnostics.textContent = error instanceof Error ? error.message : String(error);
     setStatus('error', 'failed', 'err');
     el.duration.textContent = `${Math.round(performance.now() - started)} ms`;
   } finally {
@@ -304,7 +227,6 @@ el.editor.addEventListener('keydown', (event) => {
   }
 });
 
-el.cobolUrl.textContent = cobolMirror.baseUrl;
-el.cobolOverride.textContent = cobolMirror.isOverride ? '(from ?cobolBaseUrl)' : '(default)';
-document.documentElement.dataset.status = 'ready';
+el.assetsUrl.textContent = ASSETS_URL.pathname;
 loadExample(0);
+setStatus('ready', 'ready');

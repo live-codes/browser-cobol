@@ -1,18 +1,16 @@
 /**
  * A static server for this demo.
  *
- * It exists because `file://` cannot run ES modules or fetch the wasm assets.
- * Nothing else is needed: the page runs with NO cross-origin isolation.
+ * It is rooted at the repository, not at `public/`, because the page needs three things from three
+ * places: its own files under `public/`, the package's IIFE bundle under
+ * `packages/cobol-wasm/dist/`, and the runtime assets `cobol-wasm-copy-assets` writes into `vendor/`.
+ * One root serves all three.
  *
- *   node serve.js [port] [root] [--isolation]
+ *   node serve.js [port] [--isolation]
  *
- * `root` defaults to `public/` and is resolved against this file.
- *
- * `--isolation` adds COOP/COEP, which is what a threaded WebAssembly runtime
- * would need. This toolchain is not threaded — its clang, lld and memfs modules
- * define their own unshared memories and import only functions — so the headers
- * are unnecessary. The flag is kept so the difference can still be demonstrated;
- * see FINDINGS.md for the measurements.
+ * No cross-origin isolation is needed — and `--isolation` is only here to show that adding it
+ * changes nothing. The toolchain is single-threaded, and the package installs the SharedArrayBuffer
+ * stub the host's memory wrapper expects, so the page runs on a plain origin. See FINDINGS.md.
  */
 
 import { createServer } from 'node:http';
@@ -22,10 +20,8 @@ import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
 const isolation = argv.includes('--isolation');
-const positional = argv.filter((arg) => !arg.startsWith('-'));
-
-const PORT = Number(positional[0] ?? 8126);
-const ROOT = resolve(fileURLToPath(new URL('./', import.meta.url)), positional[1] ?? 'public');
+const PORT = Number(argv.find((arg) => !arg.startsWith('-')) ?? 8126);
+const ROOT = resolve(fileURLToPath(new URL('./', import.meta.url)));
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -42,8 +38,16 @@ const TYPES = {
 };
 
 const server = createServer(async (req, res) => {
-  const urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-  const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
+  const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+
+  // `/` redirects rather than serving the page directly: relative URLs in it (`./main.js`) resolve
+  // against the request path, so serving it at `/` would ask for `/main.js`.
+  if (path === '/') {
+    res.writeHead(302, { Location: '/public/' }).end();
+    return;
+  }
+
+  const rel = (path.endsWith('/') ? `${path}index.html` : path).replace(/^\/+/, '');
   const filePath = normalize(join(ROOT, rel));
 
   if (!filePath.startsWith(normalize(ROOT))) {
@@ -62,9 +66,9 @@ const server = createServer(async (req, res) => {
   const headers = {
     'Content-Type': TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream',
     'Content-Length': body.length,
-    // Nothing here is content-pinned, so serve everything fresh; the browser
-    // caches the CDN assets instead.
-    'Cache-Control': 'no-store',
+    // The copied assets are content-pinned by the package's receipts, so they can cache hard;
+    // everything else is served fresh.
+    'Cache-Control': /^vendor[\\/]/.test(rel) ? 'public, max-age=31536000, immutable' : 'no-store',
   };
 
   if (isolation) {
@@ -77,9 +81,8 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`browser-cobol: http://localhost:${PORT}/`);
-  console.log(
-    `serving ${ROOT} — cross-origin isolation ${isolation ? 'ON (--isolation)' : 'off (not needed)'}`,
-  );
-  console.log('the GnuCOBOL/Clang toolchain comes from a runtime mirror on first run');
+  console.log(`serving ${ROOT}`);
+  console.log(`cross-origin isolation ${isolation ? 'ON (--isolation)' : 'off (not needed)'}`);
+  console.log('run `npm run vendor` first if the asset requests 404');
   console.log('press Ctrl+C to stop');
 });

@@ -1,0 +1,50 @@
+{
+  "name": "@live-codes/cobol-wasm",
+  "version": "0.1.0",
+  "description": "Run COBOL with one API, on GnuCOBOL 3.2 compiled to WebAssembly",
+  "type": "module",
+  "license": "(MIT AND GPL-3.0-or-later)",
+  "exports": {
+    ".": {
+      "node": "./src/index.node.js",
+      "browser": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./iife": "./dist/cobol-wasm.global.js"
+  },
+  "bin": {
+    "cobol-wasm-copy-assets": "./bin/copy-assets.mjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "scripts",
+    "dist",
+    "assets",
+    "LICENSE",
+    "LICENSE.GPL",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:iife": "node scripts/build-iife.mjs",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@live-codes/clang-wasm": "0.3.0",
+    "@wasm-idle/llvm-core": "^1.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  },
+  "keywords": [
+    "cobol",
+    "gnucobol",
+    "wasm",
+    "webassembly",
+    "compiler",
+    "playground"
+  ]
+}

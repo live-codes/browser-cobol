@@ -7,7 +7,7 @@
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23c8102e'/><text x='8' y='12' font-size='8' font-family='monospace' text-anchor='middle' fill='white'>cob</text></svg>"
     />
-    <title>COBOL in the browser (GnuCOBOL + WASM)</title>
+    <title>COBOL in the browser (@live-codes/cobol-wasm)</title>
     <style>
       :root {
         color-scheme: dark;
@@ -63,7 +63,6 @@
         border-radius: 6px;
         padding: 6px 8px;
       }
-      #status { color: var(--dim); font-size: 12px; }
       .badge {
         font: 11px/1 var(--mono);
         padding: 5px 8px;
@@ -167,40 +166,6 @@
       footer code { color: #a8b0bd; word-break: break-all; }
       .runtime { text-align: right; margin-left: auto; }
     </style>
-    <script type="importmap">
-      {
-        "imports": {
-          "@wasm-idle/llvm-core/cobol": "https://cdn.jsdelivr.net/npm/@wasm-idle/llvm-core@1.0.0/cobol/+esm"
-        }
-      }
-    </script>
-    <!--
-      This shim is what lets the page run WITHOUT cross-origin isolation.
-
-      The WASI host backing this toolchain writes to guest memory with a chain that
-      tests `value instanceof SharedArrayBuffer`. `instanceof` evaluates its
-      right-hand operand, so in a context where the global does not exist — i.e. any
-      page that is not cross-origin isolated — the first Uint8Array written throws
-      `ReferenceError: SharedArrayBuffer is not defined`, and compilation dies before
-      it starts.
-
-      Nothing here actually uses shared memory. Verified by inspecting the artifacts:
-      clang (44 MB), lld (21 MB) and memfs define their own UNshared memories and
-      import only functions; the host never calls `new WebAssembly.Memory`, spawns no
-      worker, and its only Atomics use sits behind the debug/worker paths this page
-      never enters. So defining the constructor purely to give that check something to
-      compare against is sufficient — and it fails loudly if something ever does try
-      to construct one.
-    -->
-    <script>
-      if (typeof SharedArrayBuffer === 'undefined') {
-        globalThis.SharedArrayBuffer = class SharedArrayBuffer {
-          constructor() {
-            throw new Error('SharedArrayBuffer is not available in this context');
-          }
-        };
-      }
-    </script>
   </head>
   <body>
     <header>
@@ -220,7 +185,7 @@
     <div id="progress" hidden>
       <span id="progress-text"></span>
       <span class="track"></span>
-      <span class="hint">the toolchain is fetched once from the runtime mirror, then cached</span>
+      <span class="hint">the toolchain is loaded once, then kept in memory</span>
     </div>
 
     <main>
@@ -235,9 +200,9 @@
       <section>
         <div class="pane-head">stdin <span class="hint">read by ACCEPT; empty means end-of-input</span></div>
         <textarea id="stdin" spellcheck="false" autocomplete="off" placeholder="one line per ACCEPT"></textarea>
-        <div class="pane-head">Program output <span class="hint">stdout, streamed as the program runs</span></div>
+        <div class="pane-head">Program output <span class="hint">stdout and stderr, in the order written</span></div>
         <pre id="output" class="output"></pre>
-        <div class="pane-head">Compiler / stderr <span class="hint">GnuCOBOL and clang diagnostics</span></div>
+        <div class="pane-head">Compiler diagnostics <span class="hint">empty when the program compiled</span></div>
         <pre id="diagnostics" class="output"></pre>
       </section>
     </main>
@@ -245,10 +210,18 @@
     <footer>
       <span class="hint">GnuCOBOL 3.2 &rarr; C &rarr; Clang 22 &rarr; WASI, entirely in this tab</span>
       <span class="runtime">
-        <code id="cobol-url"></code> <span id="cobol-override"></span>
+        <span class="hint">package:</span> <code>@live-codes/cobol-wasm</code> (IIFE bundle)<br />
+        <span class="hint">assets:</span> <code id="assets-url"></code>
       </span>
     </footer>
 
+    <!--
+      The IIFE build. It bundles the whole @wasm-idle/llvm-core host, so this page needs no import
+      map, and it installs the SharedArrayBuffer stub the host's memory wrapper expects, so this page
+      needs no cross-origin isolation either. It is a classic script on purpose: it also works in a
+      worker, and it keeps the demo's own code to plain ES modules.
+    -->
+    <script src="/packages/cobol-wasm/dist/cobol-wasm.global.js"></script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

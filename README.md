@@ -14,26 +14,29 @@ This is the **real GnuCOBOL 3.2 compiler**, not a subset or an interpreter:
 COBOL  →  GnuCOBOL `cobc` (wasm)  →  C  →  Clang 22 (wasm)  →  wasm-ld  →  WASI module  →  runs
 ```
 
-The browser-side host is [`@wasm-idle/llvm-core`](https://www.npmjs.com/package/@wasm-idle/llvm-core)
-(MIT); the compiler artifacts are produced by
-[`seo-rii/wasm-llvm`](https://github.com/seo-rii/wasm-llvm) and loaded from a CDN mirror.
+**The runtime is a package, and this repo holds it.** [`packages/cobol-wasm`](packages/cobol-wasm) is
+`@live-codes/cobol-wasm`, which is what actually runs COBOL: it ships the GnuCOBOL assets, boots the
+toolchain, compiles, runs, and hands back shaped output. The page in `public/` is a thin demo on top
+of it — examples, an editor, a stdin box, and a run button. Nothing is fetched from anyone else's
+site: the assets are copied out of the package into `vendor/` by the package's own bin.
 
 ## Demo
 
 ```bash
+npm run vendor     # copy the runtime assets from packages/cobol-wasm into vendor/
 npm start          # → http://localhost:8126/
 ```
 
 Pick an example (or type your own), press **Run** — or `Ctrl`/`Cmd` + `Enter` in the editor.
-Program output appears as it is produced; `cobc` and clang diagnostics appear below it; `ACCEPT`
-reads from the stdin box.
+Program output appears in one pane, `cobc` and clang diagnostics in the other, and `ACCEPT` reads
+from the stdin box.
+
+`npm run vendor` is the only setup step, and it is a copy, not a build: a browser cannot read a file
+inside an npm package, so the assets have to be published by whatever serves the page. It writes
+`vendor/cobol/` and `vendor/clang/` (about 25 MB), both ignored by git.
 
 A static server is required, because `file://` cannot run ES modules or fetch the wasm assets —
-but it needs no special headers. `npm start` is a plain file server.
-
-**The toolchain comes from a CDN.** ~26 MB is fetched on the first Run and cached afterwards.
-There is no build step and no `node_modules`: `public/index.html` uses an import map to load the
-host module straight from jsDelivr.
+but it needs no special headers. `serve.js` is a plain file server.
 
 ## What you get
 
@@ -46,8 +49,7 @@ host module straight from jsDelivr.
 - **Genuine compiler diagnostics**, with source excerpts and the offending line marked.
 - **Free and fixed source format.**
 - **No cross-origin isolation.** See below — this is the interesting part.
-- **Lazy toolchain load** — the page itself is ~16 KB, and the ~26 MB of compiler is fetched on
-  first use rather than on page load.
+- **Self-hosted assets.** The package ships them; `npm run vendor` publishes them next to the page.
 
 ## No cross-origin isolation
 
@@ -74,73 +76,79 @@ exactly like a threaded runtime refusing to boot. It is not one:
 - `clang.wasm`, `lld.wasm` and `memfs.wasm` each **define their own memory, all `shared: false`**,
   and import only functions — no shared memory, no threads.
 
-So `public/index.html` defines a `SharedArrayBuffer` constructor purely to give that check something
-to compare against, and the page runs anywhere. The stub throws if anything ever tries to construct
+So the package defines a `SharedArrayBuffer` constructor purely to give that check something to
+compare against, and the page runs anywhere. The stub throws if anything ever tries to construct
 one, so a future version that genuinely wants shared memory fails loudly instead of quietly
-misbehaving.
+misbehaving. The stub lives in the package now (`src/runtime.js`), not in the page — which is where
+it belongs, since the bug it works around is the runtime's.
 
 The full evidence — the bundle search, the parsed wasm memory types, and before/after measurements
 — is in [FINDINGS.md](FINDINGS.md) §2.
 
 ## Verified
 
-Every row below was run through the page in headless Chrome **with isolation off**
-(`crossOriginIsolated === false`); outputs are verbatim.
+Every row below was run through the demo page in headless Chrome **with isolation off**
+(`crossOriginIsolated === false`); outputs are verbatim, and the assets were served from `vendor/`.
 
 | program | result | compile | run |
 | --- | --- | --- | --- |
-| `DISPLAY "Hello from COBOL!"` | `Hello from COBOL!` | 763 ms | 12 ms |
+| `DISPLAY "Hello from COBOL!"` | `Hello from COBOL!` / `Compiled and run in your browser, with no server.` | 1040 ms | 17 ms |
 | `PIC 9(3)V99` + `COMPUTE WS-PAY = WS-HOURS * WS-RATE` | `Hours: 40` / `Rate:  025.50` / `Pay:   001020.00` | — | — |
 | `PERFORM VARYING WS-N FROM 1 BY 1 UNTIL WS-N > 10` | ten zero-padded `n=NN  n squared=NNNN` lines | — | — |
-| `OCCURS 3` table + `PERFORM SHOW-ROSTER` paragraph | `1: ALICE` / `2: BOB` / `3: CAROL` | — | — |
-| `ACCEPT WS-NAME` (stdin `Grace Hopper`) | `What is your name?` / `Hello, Grace Hopper!` | — | — |
+| `ACCEPT WS-NAME` (stdin `Ada Lovelace`) | `What is your name?` / `Hello, Ada Lovelace!` | — | — |
 | `ADD 1 TO WS-TOTAL` (undefined field) | `main.cob:7: error: 'WS-TOTAL' is not defined` + excerpt | — | — |
 
-Toolchain load: **~1 s warm, ~6 s in a freshly launched browser**.
+`packages/cobol-wasm` is verified twice over: `npm test` there runs the whole pipeline in Node
+against the packaged assets (16 tests, including every asset receipt), and the demo above is the
+browser path.
 
 ## Limitations
 
 - **No dynamic `CALL`, `CALL SYSTEM`, `fork`, `SCREEN SECTION` or indexed I/O.** The runtime profile
   declares these unsupported, as expected for a WASI module.
-- **~26 MB on first run.** It works on a laptop; it is not a small download. Subsequent runs reuse
-  the HTTP cache.
-- **~0.8 s to compile**, dominated by clang on the generated C. Fine for a playground; noticeable
-  in a tight edit-run loop.
+- **About 25 MB of assets.** They are copied once by `npm run vendor` and then served locally, so the
+  page's own first load is fast; the cost moves to install time.
+- **~1 s to compile**, dominated by clang on the generated C. Fine for a playground; noticeable in a
+  tight edit-run loop.
 - **stdin is all-or-nothing per run.** The stdin box is read once when the program starts; there is
   no interactive terminal.
-- **The shim depends on the toolchain staying single-threaded.** If a future `@wasm-idle/llvm-core`
+- **The stub depends on the toolchain staying single-threaded.** If a future `@wasm-idle/llvm-core`
   starts using shared memory, the stub throws and the isolation headers come back.
 
 ## Layout
 
 ```
-public/index.html     the harness page (examples, format, stdin, output, diagnostics, shim)
-public/main.js        the driver: loads the toolchain, compiles, runs, streams output
-serve.js              static server: MIME types, caching, --isolation (off by default)
-FINDINGS.md           the spike log: what was verified, what breaks, what it means
+public/index.html            the demo page (examples, format, stdin, output, diagnostics)
+public/main.js               the demo driver — everything hard now lives in the package
+serve.js                     static server: MIME types, caching, --isolation (off by default)
+packages/cobol-wasm/         @live-codes/cobol-wasm — the runtime, its assets and its tests
+FINDINGS.md                  the spike log: what was verified, what breaks, what it means
 ```
 
-There is no bundler and no `node_modules`.
+`vendor/` is generated by `npm run vendor` and ignored.
 
 ## Verifying
 
 | what | command |
 | --- | --- |
+| copy the assets the demo serves | `npm run vendor` |
 | serve the page | `npm start` → http://localhost:8126/ |
-| check syntax | `npm run check` |
+| check the demo's syntax | `npm run check` |
+| test the package | `npm test --prefix packages/cobol-wasm` |
 | serve with COOP/COEP instead | `npm run start:isolation` |
 
-The page exposes `document.documentElement.dataset` (`status`, `stage`, `runs`, `exitCode`,
-`toolchainMs`, `compileMs`, `execMs`) and its element ids as globals, so scripted checks can read
-state without string literals.
+The page exposes `document.documentElement.dataset` (`status`, `runs`, `exitCode`, `toolchainMs`,
+`compileMs`, `runMs`, `errorCount`) and its element ids as globals, so scripted checks can read state
+without string literals.
 
 ## Status
 
-Spike complete. The page compiles and runs COBOL client-side, verified end to end in headless
-Chrome against the pinned CDN, with no cross-origin isolation. Next: mirror the six compiler assets
-and add the `lang-cobol` entry to LiveCodes.
+Spike complete, and the runtime is now a package rather than a page. The demo compiles and runs COBOL
+client-side, verified end to end in headless Chrome, with no cross-origin isolation and no
+third-party host. Next: the `lang-cobol` entry in LiveCodes, loading this package's IIFE bundle.
 
 ## License
 
-MIT © Hatem Hosny. The compiler artifacts are governed by their own licenses — GnuCOBOL (GPL-3.0),
-libcob (LGPL-3.0), GMP (LGPL/GPL) and LLVM (Apache-2.0 WITH LLVM-exception). See [LICENSE](LICENSE).
+The demo and the package's own code are MIT. The package also ships GnuCOBOL, so it declares
+`(MIT AND GPL-3.0-or-later)` — see [LICENSE](LICENSE) and
+[packages/cobol-wasm/THIRD-PARTY-NOTICES.md](packages/cobol-wasm/THIRD-PARTY-NOTICES.md).

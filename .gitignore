@@ -1,0 +1,6 @@
+# The runtime assets the demo serves, written by `npm run vendor`. They are a copy of what
+# @live-codes/cobol-wasm ships, so they are generated rather than committed.
+vendor/
+
+node_modules/
+*.tgz
